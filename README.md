@@ -5,9 +5,9 @@ Task management REST API built with FastAPI.
 ## Tech Stack
 - Python
 - FastAPI
+- PostgreSQL integration
 
 ## Planned Features
-- PostgreSQL integration
 - SQLAlchemy
 - Docker support
 - JWT Authentication

@@ -1,12 +1,21 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import sqlite3
+import psycopg2
 
 app = FastAPI()
 
+HOSTNAME = "localhost"
+DATABASE = "Tasks"
+USERNAME = "postgres"
+PWD = "admin123"
+PORT_ID = 5432
 
 def connection():
-    return sqlite3.connect("tasks.db")
+    return psycopg2.connect(host=HOSTNAME, 
+                            dbname=DATABASE, 
+                            user=USERNAME,
+                            password=PWD,
+                            port=PORT_ID)
 
 def task_to_dict(task):
     return {"id":task[0],
@@ -16,9 +25,9 @@ def task_to_dict(task):
 conn = connection()
 cursor = conn.cursor()
 cursor.execute(''' CREATE TABLE IF NOT EXISTS tasks(
-               id INTEGER PRIMARY KEY AUTOINCREMENT,
-               name TEXT,
-               done BOOLEAN
+               id SERIAL PRIMARY KEY,
+               name TEXT NOT NULL,
+               done BOOLEAN DEFAULT false
                )
 ''')
 conn.commit()
@@ -51,10 +60,11 @@ def add_task(task:CreateTask) -> Task:          #add task
     cursor = conn.cursor()
     cursor.execute('''
             INSERT INTO tasks(name, done)
-            VALUES(?, ?)''', (task.name, task.done))
+            VALUES(%s, %s)
+            RETURNING id       ''', (task.name, task.done))
+    task_id = cursor.fetchone()[0]
     conn.commit()
-    task_id = cursor.lastrowid
-    
+    cursor.close()
     conn.close()
 
     return  {
@@ -69,8 +79,9 @@ def get_task(id:int) -> Task:            #get task
     conn = connection()
     cursor = conn.cursor()
     cursor.execute('''
-           SELECT * FROM tasks WHERE id=?''', (id,))
+           SELECT * FROM tasks WHERE id=%s''', (id,))
     res = cursor.fetchone()
+    cursor.close()
     conn.close()
 
     if(res is None):
@@ -86,6 +97,7 @@ def get_tasks() -> list[Task]:                                 #get all tasks
     cursor = conn.cursor()
     cursor.execute('''SELECT * FROM tasks''')
     res = cursor.fetchall()
+    cursor.close()
     conn.close()
 
     return [
@@ -98,18 +110,20 @@ def put_task(id:int, task:CreateTask) -> Task:      #change task completely
 
     conn = connection()
     cursor = conn.cursor()
-    cursor.execute('''SELECT * FROM tasks WHERE id=?''', (id,))
+    cursor.execute('''SELECT * FROM tasks WHERE id=%s''', (id,))
     exists = cursor.fetchone()
     if(exists is None):
+        cursor.close()
         conn.close()
         raise HTTPException(status_code=404, detail="Task not found")
     
-    cursor.execute('''UPDATE tasks SET name=?, done=?
-                   WHERE id=?''', (task.name, task.done, id))
+    cursor.execute('''UPDATE tasks SET name=%s, done=%s
+                   WHERE id=%s''', (task.name, task.done, id))
     conn.commit()
 
-    cursor.execute('''SELECT * FROM tasks WHERE id=?''', (id,))
+    cursor.execute('''SELECT * FROM tasks WHERE id=%s''', (id,))
     res = cursor.fetchone()
+    cursor.close()
     conn.close()
     
     return task_to_dict(res)
@@ -120,20 +134,22 @@ def change_task(id:int, task:UpdateTask) -> Task:        #change task partially
     conn = connection()
     cursor = conn.cursor()
     
-    cursor.execute('''SELECT * FROM tasks WHERE id=?''', (id,))
+    cursor.execute('''SELECT * FROM tasks WHERE id=%s''', (id,))
     exists = cursor.fetchone()
     if(exists is None):
+        cursor.close()
         conn.close()
         raise HTTPException(status_code=404, detail="Task not found")
 
     if(task.name is not None):
-            cursor.execute('''UPDATE tasks SET name=? WHERE id=?''', (task.name, id))
+            cursor.execute('''UPDATE tasks SET name=%s WHERE id=%s''', (task.name, id))
     if(task.done is not None):
-            cursor.execute('''UPDATE tasks SET done=? WHERE id=?''', (task.done, id))  
+            cursor.execute('''UPDATE tasks SET done=%s WHERE id=%s''', (task.done, id))  
 
     conn.commit()
-    cursor.execute('''SELECT * FROM tasks WHERE id=?''', (id,))
+    cursor.execute('''SELECT * FROM tasks WHERE id=%s''', (id,))
     res = cursor.fetchone()
+    cursor.close()
     conn.close()
     
     return task_to_dict(res)
@@ -143,16 +159,18 @@ def delete_task(id:int) -> Task:          #delete task
 
     conn = connection()
     cursor = conn.cursor()
-    cursor.execute('''SELECT * FROM tasks WHERE id=?''', (id,))
+    cursor.execute('''SELECT * FROM tasks WHERE id=%s''', (id,))
     res = cursor.fetchone()
 
     if(res is None):
+        cursor.close()
         conn.close()
         raise HTTPException(status_code=404, detail="Task not found")
     
     cursor.execute('''
-           DELETE FROM tasks WHERE id=?''',(id,))
+           DELETE FROM tasks WHERE id=%s''',(id,))
     conn.commit()
+    cursor.close()
     conn.close()
     
     return task_to_dict(res)
