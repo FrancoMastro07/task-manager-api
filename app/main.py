@@ -1,37 +1,16 @@
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import psycopg2
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import Column, Integer, String, Boolean, create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 
-app = FastAPI()
+Base = declarative_base()
 
-HOSTNAME = "localhost"
-DATABASE = "Tasks"
-USERNAME = "postgres"
-PWD = "admin123"
-PORT_ID = 5432
+class TaskDB(Base):
+    __tablename__ = "tasks"
 
-def connection():
-    return psycopg2.connect(host=HOSTNAME, 
-                            dbname=DATABASE, 
-                            user=USERNAME,
-                            password=PWD,
-                            port=PORT_ID)
-
-def task_to_dict(task):
-    return {"id":task[0],
-                "name":task[1],
-                "done":bool(task[2])}
-
-conn = connection()
-cursor = conn.cursor()
-cursor.execute(''' CREATE TABLE IF NOT EXISTS tasks(
-               id SERIAL PRIMARY KEY,
-               name TEXT NOT NULL,
-               done BOOLEAN DEFAULT false
-               )
-''')
-conn.commit()
-conn.close()
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    done = Column(Boolean)
 
 class CreateTask(BaseModel):
     name: str 
@@ -42,10 +21,24 @@ class Task(BaseModel):
     name: str 
     done: bool  
 
+    model_config = ConfigDict(from_attributes=True)
+
 class UpdateTask(BaseModel):
     name: str | None = None
     done: bool | None = None
 
+
+app = FastAPI()
+
+HOSTNAME = "localhost"
+DATABASE = "Tasks"
+USERNAME = "postgres"
+PWD = "admin123"
+PORT_ID = 5432
+
+engine = create_engine("postgresql+psycopg2://postgres:admin123@localhost/Tasks")
+Base.metadata.create_all(engine)
+SessionLocal = sessionmaker(bind=engine)
 
 @app.get("/")
 def root():
@@ -54,123 +47,102 @@ def root():
             "Version":"1.0"}
  
 @app.post("/tasks", response_model=Task)
-def add_task(task:CreateTask) -> Task:          #add task
-
-    conn = connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-            INSERT INTO tasks(name, done)
-            VALUES(%s, %s)
-            RETURNING id       ''', (task.name, task.done))
-    task_id = cursor.fetchone()[0]
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-    return  {
-        "id": task_id,
-        "name": task.name,
-        "done": task.done
-    }
+def add_task(t:CreateTask) -> Task:          #add task
+    
+    try:
+        session = SessionLocal()
+        task = TaskDB(name=t.name, done=t.done)
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+        
+        return task
+    finally:
+        session.close()
 
 @app.get("/tasks/{id}", response_model=Task)
 def get_task(id:int) -> Task:            #get task
 
-    conn = connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-           SELECT * FROM tasks WHERE id=%s''', (id,))
-    res = cursor.fetchone()
-    cursor.close()
-    conn.close()
+    try:
+        session = SessionLocal()
+        task = session.get(TaskDB, id)
 
-    if(res is None):
-    
-        raise HTTPException(status_code=404, detail="Task not found")
-    else:
-        return task_to_dict(res)
+        if(task is None):
+        
+            raise HTTPException(status_code=404, detail="Task not found")
+        else:
+            return task
+    finally:
+        session.close()
 
 @app.get("/tasks", response_model=list[Task])
 def get_tasks() -> list[Task]:                                 #get all tasks
 
-    conn = connection()
-    cursor = conn.cursor()
-    cursor.execute('''SELECT * FROM tasks''')
-    res = cursor.fetchall()
-    cursor.close()
-    conn.close()
+    try:
+        session = SessionLocal()
+        tasks = session.query(TaskDB).all()
 
-    return [
-        task_to_dict(task)
-        for task in res
-        ]
+        return tasks
+    finally:
+        session.close()
 
 @app.put("/tasks/{id}", response_model=Task)
-def put_task(id:int, task:CreateTask) -> Task:      #change task completely
+def put_task(id:int, t:CreateTask) -> Task:      #change task completely
 
-    conn = connection()
-    cursor = conn.cursor()
-    cursor.execute('''SELECT * FROM tasks WHERE id=%s''', (id,))
-    exists = cursor.fetchone()
-    if(exists is None):
-        cursor.close()
-        conn.close()
-        raise HTTPException(status_code=404, detail="Task not found")
+    try:
+        session = SessionLocal()
+        task = session.get(TaskDB, id)
     
-    cursor.execute('''UPDATE tasks SET name=%s, done=%s
-                   WHERE id=%s''', (task.name, task.done, id))
-    conn.commit()
+        if(task is None):
+            
+            raise HTTPException(status_code=404, detail="Task not found")
+        
+        task.name = t.name
+        task.done = t.done
+        session.commit()
+        session.refresh(task)
 
-    cursor.execute('''SELECT * FROM tasks WHERE id=%s''', (id,))
-    res = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    
-    return task_to_dict(res)
+        return task
+    finally:
+        session.close()
     
 @app.patch("/tasks/{id}", response_model=Task)
-def change_task(id:int, task:UpdateTask) -> Task:        #change task partially
+def change_task(id:int, t:UpdateTask) -> Task:        #change task partially
 
-    conn = connection()
-    cursor = conn.cursor()
+    try:
+        session = SessionLocal()
+        task = session.get(TaskDB, id)
     
-    cursor.execute('''SELECT * FROM tasks WHERE id=%s''', (id,))
-    exists = cursor.fetchone()
-    if(exists is None):
-        cursor.close()
-        conn.close()
-        raise HTTPException(status_code=404, detail="Task not found")
+        if(task is None):
+            
+            raise HTTPException(status_code=404, detail="Task not found")
 
-    if(task.name is not None):
-            cursor.execute('''UPDATE tasks SET name=%s WHERE id=%s''', (task.name, id))
-    if(task.done is not None):
-            cursor.execute('''UPDATE tasks SET done=%s WHERE id=%s''', (task.done, id))  
+        if(t.name is not None):
+                task.name = t.name
+        if(t.done is not None):
+                task.done = t.done  
 
-    conn.commit()
-    cursor.execute('''SELECT * FROM tasks WHERE id=%s''', (id,))
-    res = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    
-    return task_to_dict(res)
+        session.commit()
+        session.refresh(task)
+        
+        return task
+    finally:
+        session.close()
 
 @app.delete("/tasks/{id}", response_model=Task)
 def delete_task(id:int) -> Task:          #delete task
 
-    conn = connection()
-    cursor = conn.cursor()
-    cursor.execute('''SELECT * FROM tasks WHERE id=%s''', (id,))
-    res = cursor.fetchone()
+    try:
+        session = SessionLocal()
+        task = session.get(TaskDB, id)
 
-    if(res is None):
-        cursor.close()
-        conn.close()
-        raise HTTPException(status_code=404, detail="Task not found")
-    
-    cursor.execute('''
-           DELETE FROM tasks WHERE id=%s''',(id,))
-    conn.commit()
-    cursor.close()
-    conn.close()
-    
-    return task_to_dict(res)
+        if(task is None):
+            
+            raise HTTPException(status_code=404, detail="Task not found")
+        delete_task = task
+        session.delete(task)
+        session.commit()
+        
+        return delete_task
+    finally:
+        session.close()
