@@ -2,6 +2,14 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Column, Integer, String, Boolean, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+import os
+
+DB_USER = os.getenv("POSTGRES_USER")
+DB_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+DB_HOST = os.getenv("POSTGRES_HOST")
+DB_NAME = os.getenv("POSTGRES_DB")
+
+DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}"
 
 Base = declarative_base()
 
@@ -30,13 +38,7 @@ class UpdateTask(BaseModel):
 
 app = FastAPI()
 
-HOSTNAME = "localhost"
-DATABASE = "Tasks"
-USERNAME = "postgres"
-PWD = "admin123"
-PORT_ID = 5432
-
-engine = create_engine("postgresql+psycopg2://postgres:admin123@localhost/Tasks")
+engine = create_engine(DATABASE_URL)
 Base.metadata.create_all(engine)
 SessionLocal = sessionmaker(bind=engine)
 
